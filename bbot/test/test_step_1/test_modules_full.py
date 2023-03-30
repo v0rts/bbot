@@ -77,6 +77,11 @@ def test_massdns(bbot_config, bbot_scanner, bbot_httpserver):
 #     x.run()
 
 
+def test_secretsdb(bbot_config, bbot_scanner, bbot_httpserver):
+    x = SecretsDB(bbot_config, bbot_scanner, bbot_httpserver)
+    x.run()
+
+
 def test_badsecrets(bbot_config, bbot_scanner, bbot_httpserver):
     x = Badsecrets(bbot_config, bbot_scanner, bbot_httpserver)
     x.run()
@@ -84,6 +89,11 @@ def test_badsecrets(bbot_config, bbot_scanner, bbot_httpserver):
 
 def test_robots(bbot_config, bbot_scanner, bbot_httpserver):
     x = Robots(bbot_config, bbot_scanner, bbot_httpserver)
+    x.run()
+
+
+def test_buckets(bbot_config, bbot_scanner, bbot_httpserver):
+    x = Buckets(bbot_config, bbot_scanner, bbot_httpserver, module_name="excavate")
     x.run()
 
 
@@ -134,4 +144,14 @@ def test_nuclei_budget(bbot_config, bbot_scanner, bbot_httpserver):
 
 def test_url_manipulation(bbot_config, bbot_scanner, bbot_httpserver):
     x = Url_manipulation(bbot_config, bbot_scanner, bbot_httpserver)
+    x.run()
+
+
+def test_naabu(bbot_config, bbot_scanner, bbot_httpserver):
+    x = Naabu(bbot_config, bbot_scanner, bbot_httpserver)
+    x.run()
+
+
+def test_hunt(bbot_config, bbot_scanner, bbot_httpserver):
+    x = Hunt(bbot_config, bbot_scanner, bbot_httpserver)
     x.run()

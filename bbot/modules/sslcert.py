@@ -71,7 +71,10 @@ class sslcert(BaseModule):
             abort_threshold = self.out_of_scope_abort_threshold
         for future in self.helpers.as_completed(futures):
             host = futures[future]
-            dns_names, emails = future.result()
+            result = future.result()
+            if not isinstance(result, tuple) or not len(result) == 2:
+                continue
+            dns_names, emails = result
             if len(dns_names) > abort_threshold:
                 netloc = self.helpers.make_netloc(host, port)
                 self.info(
@@ -108,9 +111,19 @@ class sslcert(BaseModule):
                 if host.version == 6:
                     socket_type = socket.AF_INET6
             host = str(host)
-            sock = socket.socket(socket_type, socket.SOCK_STREAM)
+            try:
+                sock = socket.socket(socket_type, socket.SOCK_STREAM)
+            except Exception as e:
+                netloc = self.helpers.make_netloc(host, port)
+                self.warning(f"Error creating socket for {netloc}: {e}. Do you have IPv6 disabled?")
+                return [], []
             sock.settimeout(self.timeout)
-            context = SSL.Context(PROTOCOL_TLSv1)
+            try:
+                context = SSL.Context(PROTOCOL_TLSv1)
+            except AttributeError as e:
+                # AttributeError: module 'lib' has no attribute 'SSL_CTX_set_ecdh_auto'
+                self.warning(f"Error creating SSL context: {e}")
+                return [], []
             self.debug(f"Connecting to {host} on port {port}")
             try:
                 sock.connect((host, port))
@@ -121,7 +134,7 @@ class sslcert(BaseModule):
             connection.set_tlsext_host_name(self.helpers.smart_encode(host))
             connection.set_connect_state()
             try:
-                while True:
+                while 1:
                     try:
                         connection.do_handshake()
                     except SSL.WantReadError:

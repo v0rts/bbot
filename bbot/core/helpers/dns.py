@@ -8,11 +8,10 @@ import dns.resolver
 import dns.exception
 from threading import Lock
 from contextlib import suppress
-from concurrent.futures import ThreadPoolExecutor
 
-from .threadpool import NamedLock
 from .regexes import dns_name_regex
 from bbot.core.errors import ValidationError, DNSError
+from .threadpool import NamedLock, PatchedThreadPoolExecutor
 from .misc import is_ip, is_domain, domain_parents, parent_domain, rand_string
 
 log = logging.getLogger("bbot.core.helpers.dns")
@@ -59,7 +58,7 @@ class DNSHelper:
 
         # we need our own threadpool because using the shared one can lead to deadlocks
         max_workers = self.parent_helper.config.get("max_dns_threads", 100)
-        self._thread_pool = ThreadPoolExecutor(max_workers=max_workers)
+        self._thread_pool = PatchedThreadPoolExecutor(max_workers=max_workers)
 
         self._debug = self.parent_helper.config.get("dns_debug", False)
 
@@ -101,8 +100,6 @@ class DNSHelper:
         # DNS over TCP is more reliable
         # But setting this breaks DNS resolution on Ubuntu because systemd-resolve doesn't support TCP
         # kwargs["tcp"] = True
-        if self.parent_helper.scan.stopping:
-            return [], []
         query = str(query).strip()
         if is_ip(query):
             kwargs.pop("type", None)
@@ -124,8 +121,6 @@ class DNSHelper:
                 elif any([isinstance(t, x) for x in (list, tuple)]):
                     types = [str(_).strip().upper() for _ in t]
             for t in types:
-                if getattr(self.parent_helper.scan, "stopping", False) == True:
-                    break
                 r, e = self._resolve_hostname(query, rdtype=t, **kwargs)
                 if r:
                     results.append((t, r))
@@ -152,6 +147,8 @@ class DNSHelper:
         parent_hash = hash(f"{parent}:{rdtype}")
         dns_cache_hash = hash(f"{query}:{rdtype}")
         while tries_left > 0:
+            if self.parent_helper.scan_stopping:
+                break
             try:
                 try:
                     results = self._dns_cache[dns_cache_hash]
@@ -199,6 +196,8 @@ class DNSHelper:
         errors = []
         dns_cache_hash = hash(f"{query}:PTR")
         while tries_left > 0:
+            if self.parent_helper.scan_stopping:
+                break
             try:
                 if dns_cache_hash in self._dns_cache:
                     result = self._dns_cache[dns_cache_hash]
@@ -222,6 +221,7 @@ class DNSHelper:
         return results, errors
 
     def resolve_event(self, event, minimal=False):
+        log.debug(f"Resolving {event}")
         result = self._resolve_event(event, minimal=minimal)
         # if it's a wildcard, go again with _wildcard.{domain}
         if len(result) == 2:
@@ -250,7 +250,10 @@ class DNSHelper:
         # wildcard checks
         if not is_ip(event.host):
             # check if this domain is using wildcard dns
-            for hostname, wildcard_domain_rdtypes in self.is_wildcard_domain(event_host).items():
+            event_in_scope = event.scope_distance == 0
+            for hostname, wildcard_domain_rdtypes in self.is_wildcard_domain(
+                event_host, log_info=event_in_scope
+            ).items():
                 if wildcard_domain_rdtypes:
                     event_tags.add("wildcard-domain")
                     for rdtype, ips in wildcard_domain_rdtypes.items():
@@ -308,8 +311,9 @@ class DNSHelper:
                                     ip = self.parent_helper.make_ip_type(t)
 
                                     with suppress(ValidationError):
-                                        if self.parent_helper.scan.whitelisted(ip):
-                                            event_whitelisted = True
+                                        if self.parent_helper.is_ip(ip):
+                                            if self.parent_helper.scan.whitelisted(ip):
+                                                event_whitelisted = True
                                     with suppress(ValidationError):
                                         if self.parent_helper.scan.blacklisted(ip):
                                             event_blacklisted = True
@@ -348,9 +352,9 @@ class DNSHelper:
                     if rdtype in ("A", "AAAA"):
                         ips.add(target)
                 for ip in ips:
-                    provider, subnet = cloudcheck.check(ip)
+                    provider, provider_type, subnet = cloudcheck.check(ip)
                     if provider:
-                        event_tags.add(f"cloud-{provider.lower()}")
+                        event_tags.add(f"{provider_type}-{provider}")
 
             if "resolved" not in event_tags:
                 event_tags.add("unresolved")
@@ -557,7 +561,7 @@ class DNSHelper:
 
         return result
 
-    def is_wildcard_domain(self, domain):
+    def is_wildcard_domain(self, domain, log_info=False):
         """
         Check whether a domain is using wildcard DNS
 
@@ -616,7 +620,10 @@ class DNSHelper:
                 wildcard_domain_results.update({host: wildcard_results})
                 if is_wildcard:
                     wildcard_rdtypes_str = ",".join(sorted([t.upper() for t, r in wildcard_results.items() if r]))
-                    log.info(f"Encountered domain with wildcard DNS ({wildcard_rdtypes_str}): {host}")
+                    log_fn = log.verbose
+                    if log_info:
+                        log_fn = log.info
+                    log_fn(f"Encountered domain with wildcard DNS ({wildcard_rdtypes_str}): {host}")
 
         return wildcard_domain_results
 
